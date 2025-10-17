@@ -38,6 +38,7 @@ import uuid
 import json
 import os
 import pickle
+import numpy as np
 
 app = Flask(__name__)
 
@@ -56,6 +57,10 @@ id = str(uuid.uuid4())
 # swagger configs
 app.register_blueprint(cfg.SWAGGER_BLUEPRINT, url_prefix = cfg.SWAGGER_URL)
 FRONT_LOG_FILE = 'front_log.json'
+
+# Global cache for /values endpoint
+_values_embedding_fn = None
+_values_centroids = None
 
 
 @app.route("/")
@@ -109,7 +114,7 @@ def get_thresholds():
 @cross_origin()
 def recommend_local():
     model_id, _ = save_model.save_model()
-    prompt_json, _ = recommendation_handler.populate_json()
+    prompt_json = recommendation_handler.populate_json()
     args = request.args
     print("args list = ", args)
     prompt = args.get("prompt")
@@ -166,6 +171,43 @@ def demo_inference():
         return response
     except:
         return "Model Inference failed.", 500
+    
+@app.route("/values", methods=['GET'])
+@cross_origin()
+def get_values():
+    global _values_embedding_fn, _values_centroids
+    
+    if _values_embedding_fn is None:
+        model_id, model_path = save_model.save_model()
+        _values_embedding_fn = recommendation_handler.get_embedding_func(inference='local', model_id=model_path)
+    
+    if _values_centroids is None:
+        prompt_json = recommendation_handler.populate_json()
+        positive_embeddings = {}
+        negative_embeddings = {}
+        
+        for category in prompt_json['positive_values']:
+            positive_embeddings[category['label']] = np.array(category['centroid'])
+        
+        for category in prompt_json['negative_values']:
+            negative_embeddings[category['label']] = np.array(category['centroid'])
+        
+        _values_centroids = {
+            'positive': positive_embeddings,
+            'negative': negative_embeddings
+        }
+    
+    args = request.args
+    prompt = args.get("prompt")
+
+    values = recommendation_handler.get_values(
+        prompt, 
+        _values_centroids['positive'], 
+        _values_centroids['negative'],
+        _values_embedding_fn
+    )
+
+    return jsonify(values)
 
 if __name__=='__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() in ['true', '1', 't']

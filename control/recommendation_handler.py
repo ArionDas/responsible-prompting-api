@@ -335,3 +335,62 @@ def get_thresholds(
     thresholds['remove_higher_threshold'] = round(remove_similarities_df.describe([.9]).loc['90%', 'similarity'], 1)
 
     return thresholds
+
+def get_values(
+    prompt,
+    positive_embeddings,
+    negative_embeddings,
+    embedding_fn = None
+):
+    """
+    Compute positive and negative value associations for each sentence in the input prompt.
+    
+    Args:
+        prompt: Input prompt text.
+        positive_embeddings: Dictionary mapping positive value labels to centroid embeddings.
+        negative_embeddings: Dictionary mapping negative value labels to centroid embeddings.
+        embedding_fn: Function to generate embeddings from text.
+    
+    Returns:
+        Dictionary containing sentences with their associated positive and negative values and similarity scores.
+    """
+
+    sentences = split_into_sentences(prompt)
+
+    values = {}
+    values["prompts"] = []
+
+    for sentence in sentences:
+        
+        sentence_embedding = np.array(embedding_fn(sentence))
+
+        max_similarity_positive = -1
+        positive_label = None
+        for label, centroid in positive_embeddings.items():
+            similarity = cosine_similarity(
+                np.expand_dims(sentence_embedding, axis=0),
+                np.array([centroid])
+            )[0, 0]
+            if similarity > max_similarity_positive:
+                max_similarity_positive = similarity
+                positive_label = label
+
+        max_similarity_negative = -1
+        negative_label = None
+        for label, centroid in negative_embeddings.items():
+            similarity = cosine_similarity(
+                np.expand_dims(sentence_embedding, axis=0),
+                np.array([centroid])
+            )[0, 0]
+            if similarity > max_similarity_negative:
+                max_similarity_negative = similarity
+                negative_label = label
+
+        values["prompts"].append({
+            "sentence": sentence,
+            "positive_value": {"label": positive_label, "similarity": max_similarity_positive},
+            "negative_value": {"label": negative_label, "similarity": max_similarity_negative}
+        })
+
+    return values
+
