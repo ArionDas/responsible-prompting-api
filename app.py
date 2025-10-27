@@ -39,6 +39,7 @@ import json
 import os
 import pickle
 import numpy as np
+from functools import lru_cache
 
 app = Flask(__name__)
 
@@ -58,10 +59,41 @@ id = str(uuid.uuid4())
 app.register_blueprint(cfg.SWAGGER_BLUEPRINT, url_prefix = cfg.SWAGGER_URL)
 FRONT_LOG_FILE = 'front_log.json'
 
-# Global cache for /values endpoint
-_values_embedding_fn = None
-_values_centroids = None
+@lru_cache(maxsize=1)
+def get_values_embedding_function():
+    """
+    Getting the embedding function for the /values endpoint.
+    Cached to avoid reloading the model multiple times.
+    
+    Returns:
+        Embedding function callable
+    """
+    model_id, model_path = save_model.save_model()
+    return recommendation_handler.get_embedding_func(inference='local', model_id=model_path)
 
+@lru_cache(maxsize=1)
+def get_values_centroids():
+    """
+    Getting the positive and negative value centroids for the /values endpoint.
+    Cached to avoid reloading the data multiple times.
+    
+    Returns:
+        Dictionary with 'positive' and 'negative' centroid embeddings
+    """
+    prompt_json = recommendation_handler.populate_json()
+    positive_category_centroid = {}
+    negative_category_centroid = {}
+
+    for category in prompt_json['positive_values']:
+        positive_category_centroid[category['label']] = np.array(category['centroid'])
+
+    for category in prompt_json['negative_values']:
+        negative_category_centroid[category['label']] = np.array(category['centroid'])
+
+    return {
+        'positive': positive_category_centroid,
+        'negative': negative_category_centroid
+    }
 
 @app.route("/")
 def index():
@@ -175,39 +207,38 @@ def demo_inference():
 @app.route("/values", methods=['GET'])
 @cross_origin()
 def get_values():
-    global _values_embedding_fn, _values_centroids
-    
-    if _values_embedding_fn is None:
-        model_id, model_path = save_model.save_model()
-        _values_embedding_fn = recommendation_handler.get_embedding_func(inference='local', model_id=model_path)
-    
-    if _values_centroids is None:
-        prompt_json = recommendation_handler.populate_json()
-        positive_embeddings = {}
-        negative_embeddings = {}
-        
-        for category in prompt_json['positive_values']:
-            positive_embeddings[category['label']] = np.array(category['centroid'])
-        
-        for category in prompt_json['negative_values']:
-            negative_embeddings[category['label']] = np.array(category['centroid'])
-        
-        _values_centroids = {
-            'positive': positive_embeddings,
-            'negative': negative_embeddings
-        }
-    
+    """
+    Getting positive and negative values for a given prompt using cached embedding function and centroids for performance.
+    """
     args = request.args
     prompt = args.get("prompt")
-
-    values = recommendation_handler.get_values(
-        prompt, 
-        _values_centroids['positive'], 
-        _values_centroids['negative'],
-        _values_embedding_fn
-    )
-
-    return jsonify(values)
+    
+    # validating input
+    if not prompt:
+        return jsonify({"error": "Missing required parameter: prompt"}), 400
+    
+    if not isinstance(prompt, str):
+        return jsonify({"error": "Parameter 'prompt' must be a string"}), 400
+    
+    if len(prompt.strip()) == 0:
+        return jsonify({"error": "Parameter 'prompt' cannot be empty"}), 400
+    
+    try:
+        embedding_fn = get_values_embedding_function()
+        centroids = get_values_centroids()
+        
+        values = recommendation_handler.get_values(
+            prompt, 
+            centroids['positive'], 
+            centroids['negative'],
+            embedding_fn
+        )
+        
+        return jsonify(values)
+    
+    except Exception as e:
+        logger.error(f'Error in /values endpoint: {str(e)}')
+        return jsonify({"error": "Internal server error processing prompt"}), 500
 
 if __name__=='__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() in ['true', '1', 't']

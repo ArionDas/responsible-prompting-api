@@ -355,14 +355,34 @@ def get_values(
         Dictionary containing sentences with their associated positive and negative values and similarity scores.
     """
 
+    if embedding_fn is None:
+        # using all-MiniLM-L6-v2 locally by default
+        embedding_fn = get_embedding_func('local', model_id='sentence-transformers/all-MiniLM-L6-v2')
+
     sentences = split_into_sentences(prompt)
+    
+    # bifurcating and filtering out empty sentences
+    sentences = [s for s in sentences if s.strip()]
 
     values = {}
     values["prompts"] = []
+    
+    # returning if no valid sentences
+    if not sentences:
+        return values
 
-    for sentence in sentences:
+    # generating all sentence embeddings in a single call by batching all
+    sentence_embeddings = embedding_fn(sentences)
+    sentence_embeddings = np.array(sentence_embeddings)
+    
+    # ensuring embeddings have correct shape - expanding embeddings of all sentences
+    if len(sentence_embeddings.shape) == 1:
+        sentence_embeddings = np.expand_dims(sentence_embeddings, axis=0)
+
+    # processing each sentence with its corresponding embedding
+    for idx, sentence in enumerate(sentences):
         
-        sentence_embedding = np.array(embedding_fn(sentence))
+        sentence_embedding = sentence_embeddings[idx]
 
         max_similarity_positive = -1
         positive_label = None
@@ -388,8 +408,8 @@ def get_values(
 
         values["prompts"].append({
             "sentence": sentence,
-            "positive_value": {"label": positive_label, "similarity": max_similarity_positive},
-            "negative_value": {"label": negative_label, "similarity": max_similarity_negative}
+            "positive_value": {"label": positive_label, "similarity": float(max_similarity_positive)},
+            "negative_value": {"label": negative_label, "similarity": float(max_similarity_negative)}
         })
 
     return values
