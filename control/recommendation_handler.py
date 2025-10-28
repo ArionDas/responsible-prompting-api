@@ -335,3 +335,82 @@ def get_thresholds(
     thresholds['remove_higher_threshold'] = round(remove_similarities_df.describe([.9]).loc['90%', 'similarity'], 1)
 
     return thresholds
+
+def get_values(
+    prompt,
+    positive_embeddings,
+    negative_embeddings,
+    embedding_fn = None
+):
+    """
+    Compute positive and negative value associations for each sentence in the input prompt.
+    
+    Args:
+        prompt: Input prompt text.
+        positive_embeddings: Dictionary mapping positive value labels to centroid embeddings.
+        negative_embeddings: Dictionary mapping negative value labels to centroid embeddings.
+        embedding_fn: Function to generate embeddings from text.
+    
+    Returns:
+        Dictionary containing sentences with their associated positive and negative values and similarity scores.
+    """
+
+    if embedding_fn is None:
+        # using all-MiniLM-L6-v2 locally by default
+        embedding_fn = get_embedding_func('local', model_id='sentence-transformers/all-MiniLM-L6-v2')
+
+    sentences = split_into_sentences(prompt)
+    
+    # bifurcating and filtering out empty sentences
+    sentences = [s for s in sentences if s.strip()]
+
+    values = {}
+    values["prompts"] = []
+    
+    # returning if no valid sentences
+    if not sentences:
+        return values
+
+    # generating all sentence embeddings in a single call by batching all
+    sentence_embeddings = embedding_fn(sentences)
+    sentence_embeddings = np.array(sentence_embeddings)
+    
+    # ensuring embeddings have correct shape - expanding embeddings of all sentences
+    if len(sentence_embeddings.shape) == 1:
+        sentence_embeddings = np.expand_dims(sentence_embeddings, axis=0)
+
+    # processing each sentence with its corresponding embedding
+    for idx, sentence in enumerate(sentences):
+        
+        sentence_embedding = sentence_embeddings[idx]
+
+        max_similarity_positive = -1
+        positive_label = None
+        for label, centroid in positive_embeddings.items():
+            similarity = cosine_similarity(
+                np.expand_dims(sentence_embedding, axis=0),
+                np.array([centroid])
+            )[0, 0]
+            if similarity > max_similarity_positive:
+                max_similarity_positive = similarity
+                positive_label = label
+
+        max_similarity_negative = -1
+        negative_label = None
+        for label, centroid in negative_embeddings.items():
+            similarity = cosine_similarity(
+                np.expand_dims(sentence_embedding, axis=0),
+                np.array([centroid])
+            )[0, 0]
+            if similarity > max_similarity_negative:
+                max_similarity_negative = similarity
+                negative_label = label
+
+        values["prompts"].append({
+            "sentence": sentence,
+            "positive_value": {"label": positive_label, "similarity": float(max_similarity_positive)},
+            "negative_value": {"label": negative_label, "similarity": float(max_similarity_negative)}
+        })
+
+    return values
+
